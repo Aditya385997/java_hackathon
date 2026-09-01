@@ -1,6 +1,6 @@
 # Project Context
 
-Java 21 + Spring Boot 3.3 REST service. Maven. Built under hackathon time pressure
+Java 17 + Spring Boot 3.3 REST service. Maven. Built under hackathon time pressure
 but must read as production code. Root package: `com.aditya.app`.
 
 ## Commands
@@ -8,6 +8,12 @@ but must read as production code. Root package: `com.aditya.app`.
 - Run: `./mvnw spring-boot:run`   (H2, seeded, http://localhost:8080/swagger-ui.html)
 - Test: `./mvnw test`
 - Full verify before any push: `./mvnw -B verify`
+- Debug: VS Code "Debug app (H2)" config (F5). Hot code replace is on — method-body
+  edits apply live, structural changes need a restart.
+- Debug via Maven: `./mvnw spring-boot:run -Dspring-boot.run.jvmArguments="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"`
+  then attach with the "Attach on 5005" config.
+- H2 console: http://localhost:8080/h2-console — JDBC URL `jdbc:h2:mem:appdb`, user `sa`, blank password.
+- API docs JSON (import into Postman): http://localhost:8080/v3/api-docs
 
 ## Non-negotiable conventions
 
@@ -32,6 +38,14 @@ Feature-first. Each feature gets `domain/ dto/ repo/ service/ web/` under
 `com.aditya.app.<feature>`. Cross-cutting code goes in `common/` or `config/`.
 `com.aditya.app.demo` is the reference slice — copy its shape, then delete it once
 the real features exist.
+
+## Frontend
+
+React + Vite in `frontend/`. Plain JS, no TypeScript, no UI or state library.
+- Dev: `cd frontend && npm run dev` (port 5173, proxies /api to 8080)
+- All HTTP calls go in `src/api.js`. Components never call fetch directly.
+- Errors surface the backend's ApiError `message` field.
+- Keep components small and dumb. useState/useEffect only.
 
 ## Testing
 
@@ -58,3 +72,7 @@ the real features exist.
   single implementation, no new dependency without asking.
 - If a requirement is ambiguous, ask one question rather than guessing.
 - When you make a non-obvious tradeoff, add one line to `NOTES.md` explaining why.
+
+## Design lens
+Every design choice must answer: scalable, reliable, maintainable.
+When they conflict under time pressure, maintainability wins and the tradeoff goes in NOTES.md.
