@@ -76,3 +76,18 @@ React + Vite in `frontend/`. Plain JS, no TypeScript, no UI or state library.
 ## Design lens
 Every design choice must answer: scalable, reliable, maintainable.
 When they conflict under time pressure, maintainability wins and the tradeoff goes in NOTES.md.
+
+## Data persistence
+
+Default profile uses H2 in-memory (`jdbc:h2:mem:appdb`) with `ddl-auto: create-drop`.
+Data does not survive restarts — this is intentional for test isolation and clean demos.
+`data.sql` re-seeds on every boot. Do not switch to file-based H2 unless requirements
+demand persistence across restarts.
+The `postgres` profile is the production path: Flyway owns the schema, Hibernate is `validate` only.
+
+## Repo hygiene
+
+- Never commit `target/`, `frontend/node_modules/`, `frontend/dist/`, or IDE files.
+- Do not create new top-level directories or config files without asking.
+- Do not add dependencies to `pom.xml` or `package.json` without asking.
+- Do not modify `CLAUDE.md`, `README.md`, or `NOTES.md` unless I ask — I maintain those.
