@@ -39,3 +39,6 @@ com.aditya.app
 ```
 
 Conventions and AI working agreement live in `CLAUDE.md`.
+
+Data is stored in H2 in-memory and resets on restart. Seed data reloads from `data.sql`
+on every boot. For persistence across restarts, run the `postgres` profile.

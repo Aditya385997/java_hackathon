@@ -18,4 +18,6 @@
 
 ## Known gaps / what I'd do with more time
 
--
+- H2 in-memory for development, Postgres + Flyway for production. Dev gets fast startup and
+  clean test isolation; prod gets versioned migrations with Hibernate restricted to `validate`.
+  Tradeoff: dev data doesn't persist across restarts, which is acceptable and desirable here.
