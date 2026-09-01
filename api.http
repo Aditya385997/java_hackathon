@@ -1,0 +1,22 @@
+@host = http://localhost:8080
+
+### Create
+POST {{host}}/api/v1/tasks
+Content-Type: application/json
+
+{ "title": "First task" }
+
+### List
+GET {{host}}/api/v1/tasks
+
+### List by status
+GET {{host}}/api/v1/tasks?status=NEW
+
+### Get one
+GET {{host}}/api/v1/tasks/1
+
+### Transition
+PATCH {{host}}/api/v1/tasks/1/status
+Content-Type: application/json
+
+{ "status": "IN_PROGRESS" }
