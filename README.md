@@ -1,6 +1,6 @@
 # Hackathon Seed
 
-Java 21 + Spring Boot 3.3 REST service scaffold. Replace this README with the real one
+Java 17 + Spring Boot 3.3 REST service scaffold. Replace this README with the real one
 once the problem statement lands.
 
 ## Run
