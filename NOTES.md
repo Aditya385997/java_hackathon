@@ -18,6 +18,12 @@ The reference `demo` slice was deleted once `dispatch` replaced it.
 | `Order.reassignTo` transitions *before* assigning the agent | Assign then validate | An out-of-state reassign fails with nothing mutated, so the transaction rollback has less to undo and the entity is never briefly inconsistent. |
 | `Agent.decrementLoad()` throws rather than clamping at zero | `Math.max(0, count - 1)` | A decrement below zero means the counters have drifted from reality. Silently clamping hides that; T-2's load balancing would then read a wrong number. |
 | Integration tests are `@Transactional` | Fresh context or explicit cleanup per test | They mutate the shared seeded H2 rows; without rollback they become order-dependent. Cheaper than rebuilding the context. |
+| Routing behind a `RoutingStrategy` interface + `RoutingStrategyRegistry` + `RoutingStrategySelector` | A single routing service with a `switch` on strategy name | The HTTP caller and T-4's async handler depend only on the contract and `SuggestionService.suggest`. `AiRoutingStrategy` (T-3) and a future `ZoneAffinityStrategy` register as Spring beans and become switchable with no caller change. |
+| Active strategy held in an `AtomicReference`, switched via `PATCH /api/v1/routing/strategy` | `@Value("${routing.strategy}")` alone; a dynamic-config dependency | The brief requires switching without a restart, which `@Value` cannot do. **Tradeoff:** the active key is in-memory and resets to the configured default on restart. Sufficient for the hackathon; a persisted config store can replace it later without touching the seam. |
+| `RoutingContext` carries immutable `OrderSnapshot`/`AgentSnapshot` records | Passing the JPA entities | Structurally enforces "routing recommends, it never mutates" — a strategy running inside the caller's transaction has nothing it could accidentally flush. Costs one small mapping step, and gives T-3 a clean serializable payload. |
+| Eligibility filtering lives in the strategy, not the service | Service pre-filters to AVAILABLE, strategy only ranks | Lets a future zone- or capacity-aware strategy weigh an agent this one discards, without the caller changing. Deviates from the brief's literal step ordering; it is what makes the strategy's exclusion tests meaningful. |
+| Rule-based confidence is a fixed `1.00` | Deriving it from list position (1.00, 0.90, 0.80...) | The value means "certain about the ordering this rule produced", not "100% likely the objectively best agent". A deterministic rule carries no probability, so position-derived numbers would be arbitrary pseudo-scoring. Genuine model-returned confidence arrives with T-3. |
+| `RoutingStrategy` is an interface with one implementation | Concrete class now, extract the interface in T-3 | **A knowing exception to CLAUDE.md's "no interface with a single implementation".** The seam is the deliverable: T-3 adds the AI strategy and T-4 an async caller, and both must land without reworking the HTTP layer. Called out here so the conventions file and the code do not silently disagree. |
 
 ## Corrections to AI output
 
@@ -36,9 +42,10 @@ The reference `demo` slice was deleted once `dispatch` replaced it.
 
 ## Known gaps / what I'd do with more time
 
-- Nothing creates a `ReassignmentSuggestion` yet (T-2), so the accept/reject path is
-  reachable only by seeding a row through the H2 console or, as the integration tests do,
-  through the repository.
+- `POST /api/v1/orders/{id}/suggest` (T-2) now raises suggestions, so the accept/reject path
+  is reachable end to end without hand-seeding rows.
+- Only `rule-based` is registered. The switch endpoint is real but has nothing to switch to
+  until T-3 registers `ai`.
 - `PATCH /agents/{id}/status` records availability and stops there. Reacting to OFFLINE is T-4.
 - Sprint-2 placeholders (`Agent.zone`, `Agent.maxCapacity`, `Order.zone`,
   `Order.weightClass`, `Order.slaDeadline`) are nullable columns with no behaviour attached.

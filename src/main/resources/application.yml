@@ -23,6 +23,11 @@ spring:
   flyway:
     enabled: false
 
+# Initial routing strategy. Switchable at runtime via PATCH /api/v1/routing/strategy;
+# this value is what the application falls back to on restart.
+routing:
+  strategy: rule-based
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

@@ -52,12 +52,20 @@ public class Order {
         this.assignedAgentId = assignedAgentId;
     }
 
-    /** Behaviour lives on the entity where it belongs to the entity. */
-    public void transitionTo(OrderStatus target) {
+    /**
+     * Guard without applying, so a caller can reject an invalid request up front rather than
+     * after doing work it would have to roll back.
+     */
+    public void requireCanTransitionTo(OrderStatus target) {
         if (!status.canTransitionTo(target)) {
             throw new BusinessRuleException(
                     "Cannot move order " + id + " from " + status + " to " + target);
         }
+    }
+
+    /** Behaviour lives on the entity where it belongs to the entity. */
+    public void transitionTo(OrderStatus target) {
+        requireCanTransitionTo(target);
         this.status = target;
     }
 

@@ -1,18 +1,29 @@
 package com.aditya.app.dispatch.service;
 
+import com.aditya.app.common.BusinessRuleException;
 import com.aditya.app.common.NotFoundException;
 import com.aditya.app.dispatch.domain.Agent;
 import com.aditya.app.dispatch.domain.Order;
+import com.aditya.app.dispatch.domain.OrderStatus;
 import com.aditya.app.dispatch.domain.ReassignmentSuggestion;
 import com.aditya.app.dispatch.domain.SuggestionStatus;
+import com.aditya.app.dispatch.domain.TriggerReason;
 import com.aditya.app.dispatch.dto.SuggestionResponse;
 import com.aditya.app.dispatch.repo.AgentRepository;
 import com.aditya.app.dispatch.repo.OrderRepository;
 import com.aditya.app.dispatch.repo.ReassignmentSuggestionRepository;
+import com.aditya.app.dispatch.routing.AgentSnapshot;
+import com.aditya.app.dispatch.routing.OrderSnapshot;
+import com.aditya.app.dispatch.routing.RoutingContext;
+import com.aditya.app.dispatch.routing.RoutingRecommendation;
+import com.aditya.app.dispatch.routing.RoutingStrategy;
+import com.aditya.app.dispatch.routing.RoutingStrategySelector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 @Service
 @Transactional(readOnly = true)
@@ -23,13 +34,54 @@ public class SuggestionService {
     private final ReassignmentSuggestionRepository suggestionRepository;
     private final OrderRepository orderRepository;
     private final AgentRepository agentRepository;
+    private final RoutingStrategySelector strategySelector;
 
     public SuggestionService(ReassignmentSuggestionRepository suggestionRepository,
                              OrderRepository orderRepository,
-                             AgentRepository agentRepository) {
+                             AgentRepository agentRepository,
+                             RoutingStrategySelector strategySelector) {
         this.suggestionRepository = suggestionRepository;
         this.orderRepository = orderRepository;
         this.agentRepository = agentRepository;
+        this.strategySelector = strategySelector;
+    }
+
+    /**
+     * Produces an INITIAL recommendation for an order and parks it pending an operator's
+     * decision. Routing runs through whichever strategy is active, so this method never
+     * needs to know which one that is.
+     *
+     * <p>A second call for the same order fails: the order is REASSIGNMENT_PENDING by then
+     * and the state machine refuses to move it there again.
+     */
+    @Transactional
+    public SuggestionResponse suggest(String orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new NotFoundException("Order", orderId));
+        // Fail before doing routing work the transaction would only roll back.
+        order.requireCanTransitionTo(OrderStatus.REASSIGNMENT_PENDING);
+
+        RoutingStrategy strategy = strategySelector.active();
+        RoutingContext context = new RoutingContext(
+                OrderSnapshot.from(order),
+                agentRepository.findAll().stream().map(AgentSnapshot::from).toList(),
+                TriggerReason.INITIAL);
+
+        List<RoutingRecommendation> recommendations = strategy.recommend(context);
+        if (recommendations.isEmpty()) {
+            throw new BusinessRuleException("No eligible agent available to take order " + orderId);
+        }
+        RoutingRecommendation top = recommendations.get(0);
+
+        order.transitionTo(OrderStatus.REASSIGNMENT_PENDING);
+        orderRepository.save(order);
+
+        ReassignmentSuggestion saved = suggestionRepository.save(new ReassignmentSuggestion(
+                order.getId(), top.recommendedAgentId(), top.confidence(), top.reasoning(),
+                TriggerReason.INITIAL, top.strategyUsed()));
+        log.info("Strategy '{}' recommended agent {} for order {}; suggestion {} is pending",
+                strategy.key(), top.recommendedAgentId(), orderId, saved.getId());
+        return SuggestionResponse.from(saved);
     }
 
     /**
