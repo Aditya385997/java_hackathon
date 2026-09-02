@@ -1,22 +1,80 @@
-@host = http://localhost:8080
+@host = http://localhost:8080/api/v1
 
-### Create
-POST {{host}}/api/v1/tasks
+### List every order
+GET {{host}}/orders
+
+### Filter by status (ASSIGNED | REASSIGNMENT_PENDING | REASSIGNED | DELIVERED)
+GET {{host}}/orders?status=ASSIGNED
+
+### Unknown status -> 400 with a field violation
+GET {{host}}/orders?status=BOGUS
+
+### Create an order (201; increments the agent's activeOrderCount)
+POST {{host}}/orders
 Content-Type: application/json
 
-{ "title": "First task" }
+{ "id": "ORD-009", "description": "Flowers — Frazer Town to Cooke Town", "assignedAgentId": "AGT-002" }
 
-### List
-GET {{host}}/api/v1/tasks
-
-### List by status
-GET {{host}}/api/v1/tasks?status=NEW
-
-### Get one
-GET {{host}}/api/v1/tasks/1
-
-### Transition
-PATCH {{host}}/api/v1/tasks/1/status
+### Duplicate id -> 409
+POST {{host}}/orders
 Content-Type: application/json
 
-{ "status": "IN_PROGRESS" }
+{ "id": "ORD-001", "description": "Duplicate", "assignedAgentId": "AGT-002" }
+
+### Unknown agent -> 404
+POST {{host}}/orders
+Content-Type: application/json
+
+{ "id": "ORD-010", "description": "Orphan parcel", "assignedAgentId": "AGT-999" }
+
+### Ask the active routing strategy where ORD-001 should go (201)
+### Creates a PENDING suggestion and moves the order to REASSIGNMENT_PENDING.
+POST {{host}}/orders/ORD-001/suggest
+
+### Repeat the same suggest -> 409, the state machine refuses a second pending suggestion
+POST {{host}}/orders/ORD-001/suggest
+
+### Which routing strategy is active, and what is registered?
+GET {{host}}/routing/strategy
+
+### Switch the active strategy at runtime — takes effect on the next call, no restart
+PATCH {{host}}/routing/strategy
+Content-Type: application/json
+
+{ "strategy": "rule-based" }
+
+### Switch to the AI strategy (T-3) -> 200, active becomes "ai" on the next routing call
+### With no GEMINI_API_KEY set this still succeeds: "ai" activates, and each routing call then
+### degrades to rule-based, so the suggestion above comes back with strategyUsed "rule-based".
+### The WARN line naming the fallback reason is in the application log.
+PATCH {{host}}/routing/strategy
+Content-Type: application/json
+
+{ "strategy": "ai" }
+
+### Unregistered strategy -> 409, the previous strategy stays active
+### "ai" is registered since T-3, so this probe needs a key nothing answers to.
+PATCH {{host}}/routing/strategy
+Content-Type: application/json
+
+{ "strategy": "zone-affinity" }
+
+### Update agent availability (AVAILABLE | BUSY | OFFLINE)
+### T-1 only records the status; reassigning that agent's orders is T-4.
+PATCH {{host}}/agents/AGT-001/status
+Content-Type: application/json
+
+{ "status": "OFFLINE" }
+
+### Accept a reassignment suggestion
+### Requires the order to be REASSIGNMENT_PENDING — run the suggest request above first.
+PATCH {{host}}/suggestions/1
+Content-Type: application/json
+
+{ "status": "ACCEPTED" }
+
+### Reject a suggestion (order stays REASSIGNMENT_PENDING)
+PATCH {{host}}/suggestions/1
+Content-Type: application/json
+
+{ "status": "REJECTED" }

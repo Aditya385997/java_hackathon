@@ -23,6 +23,25 @@ spring:
   flyway:
     enabled: false
 
+# Initial routing strategy. Switchable at runtime via PATCH /api/v1/routing/strategy;
+# this value is what the application falls back to on restart.
+routing:
+  strategy: rule-based
+
+# AI routing (T-3). The credential comes from the environment only and is never committed.
+# With GEMINI_API_KEY unset the 'ai' strategy is still registered and switchable — it just
+# degrades to rule-based on every call and logs why, which is what keeps `mvnw verify` and
+# an unkeyed demo honest.
+llm:
+  base-url: https://generativelanguage.googleapis.com/v1beta
+  model: gemini-3.6-flash
+  api-key: ${GEMINI_API_KEY:}
+  timeout: 5s
+  # Combined budget for the model's thinking tokens AND the answer it writes — Gemini 3.x
+  # spends this on reasoning first, so a value sized for the JSON alone gets truncated
+  # mid-string. The answer itself is ~150 tokens; the rest is headroom for thinking.
+  max-output-tokens: 2048
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
