@@ -24,6 +24,15 @@ The reference `demo` slice was deleted once `dispatch` replaced it.
 | Eligibility filtering lives in the strategy, not the service | Service pre-filters to AVAILABLE, strategy only ranks | Lets a future zone- or capacity-aware strategy weigh an agent this one discards, without the caller changing. Deviates from the brief's literal step ordering; it is what makes the strategy's exclusion tests meaningful. |
 | Rule-based confidence is a fixed `1.00` | Deriving it from list position (1.00, 0.90, 0.80...) | The value means "certain about the ordering this rule produced", not "100% likely the objectively best agent". A deterministic rule carries no probability, so position-derived numbers would be arbitrary pseudo-scoring. Genuine model-returned confidence arrives with T-3. |
 | `RoutingStrategy` is an interface with one implementation | Concrete class now, extract the interface in T-3 | **A knowing exception to CLAUDE.md's "no interface with a single implementation".** The seam is the deliverable: T-3 adds the AI strategy and T-4 an async caller, and both must land without reworking the HTTP layer. Called out here so the conventions file and the code do not silently disagree. |
+| **T-3** | | |
+| `LLMGateway` is transport only; parsing and validation live in `AiRoutingStrategy` | A gateway that returns a typed, already-validated recommendation | One boundary where model output stops being trusted, and it is the boundary the fallback tests exercise. Swapping Gemini for another provider touches one class and none of the rules that decide whether an answer is usable. |
+| Validation rejects the whole response on the first violation and falls back | Repairing the answer — clamp the confidence, pick the next-best agent | A repaired answer is no longer the model's answer, and `strategyUsed: "ai"` would then be a lie. Rule-based is a correct, explainable result; a patched hallucination is not. |
+| Fallback returns `RuleBasedRoutingStrategy`'s own recommendations unmodified | Re-labelling or wrapping them in the AI strategy | `strategyUsed` names the real producer with no code to keep in sync. **Cost:** `AiRoutingStrategy` holds a compile-time reference to the concrete rule-based bean — asking `RoutingStrategyRegistry` for it would be a circular dependency, since the registry is built from every `RoutingStrategy` bean including this one. |
+| Two hand-written prompts dispatched on `TriggerReason`, plus a nullable `RecoveryContext` on `RoutingContext` | One template with the trigger line swapped | Recovery is a different decision, not the same decision relabelled: it optimises for absorbing the *remaining* stranded orders, not for the best fit for this one. `RecoveryContext(failedAgentId, strandedOrderCount)` carries the facts that difference needs, so T-4 populates it without `RoutingStrategy` changing shape. A secondary 3-arg constructor keeps every T-2 call site compiling. |
+| Model confidence is range-checked raw, then `setScale(2)` | Rounding first, or widening the column | The check is on what the model actually said; the rounding is persistence normalisation for the existing `NUMERIC(3,2)` column. It can never turn an out-of-range confidence into an acceptable one, and it never changes which agent was chosen. Reasoning is stored byte-for-byte verbatim — it is the deliverable. |
+| No API key → `ai` still registers and degrades to rule-based per call | `@ConditionalOnProperty` so `ai` is not registered without a credential | The switch endpoint and its tests stay meaningful in CI and in an unkeyed demo, and the degradation path exercised there is the same one a quota error or an outage takes in production. |
+| `POST /orders/{id}/suggest` stays synchronous | Making every AI call async in T-3 | The critical path is the state-change endpoints (`POST /orders`, `PATCH /agents/{id}/status`, `PATCH /suggestions/{id}`), not a human explicitly asking for a recommendation whose whole payload *is* the model's answer. Returning 202 with an empty suggestion would break the 201 + `SuggestionResponse` contract to spare a caller who chose to wait. T-4's OFFLINE handler stays off the critical path by answering the PATCH first and re-planning on a background thread — `AiRoutingStrategy` is stateless, so it needs no change to be called from there. **Tradeoff:** `/suggest` can take up to the 5s gateway timeout before falling back; bounded, logged, never a 500. |
+| `SuggestionService` logs `top.strategyUsed()` rather than `strategy.key()` | Leaving the T-2 log line alone | Once a strategy can fall back internally, `strategy.key()` prints `ai` for an answer the rule produced — the log would contradict the row it just persisted. A one-word fix, but during an incident the log is what gets read first. |
 
 ## Corrections to AI output
 
@@ -44,8 +53,15 @@ The reference `demo` slice was deleted once `dispatch` replaced it.
 
 - `POST /api/v1/orders/{id}/suggest` (T-2) now raises suggestions, so the accept/reject path
   is reachable end to end without hand-seeding rows.
-- Only `rule-based` is registered. The switch endpoint is real but has nothing to switch to
-  until T-3 registers `ai`.
+- `ai` and `rule-based` are both registered and switchable at runtime. The AI path has been
+  verified end to end only through its *fallback* in automated tests — `mvnw verify` runs
+  with no `GEMINI_API_KEY`, by design, so it never depends on a live provider. The keyed
+  path is verified manually.
+- `AiRoutingStrategy` calls the model once and takes its single answer. It does not ask for
+  a ranked list, and it does not skip the call when the roster provably has no eligible
+  agent — one wasted call on an all-BUSY roster, in exchange for one less branch.
+- `RecoveryContext` is designed and tested but nothing populates it yet: `SuggestionService`
+  always passes `TriggerReason.INITIAL`. Wiring the AGENT_OFFLINE trigger is T-4.
 - `PATCH /agents/{id}/status` records availability and stops there. Reacting to OFFLINE is T-4.
 - Sprint-2 placeholders (`Agent.zone`, `Agent.maxCapacity`, `Order.zone`,
   `Order.weightClass`, `Order.slaDeadline`) are nullable columns with no behaviour attached.

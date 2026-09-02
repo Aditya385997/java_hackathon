@@ -11,6 +11,16 @@ import java.util.List;
  *
  * <p>{@code triggerReason} is what lets a strategy tell an initial recommendation from
  * recovery after an agent went offline, without the interface changing shape.
+ *
+ * <p>{@code recovery} carries the AGENT_OFFLINE-only facts and is null for INITIAL. The
+ * three-argument constructor is the INITIAL form, so every T-2 caller reads unchanged.
  */
 public record RoutingContext(OrderSnapshot order, List<AgentSnapshot> agents,
-                             TriggerReason triggerReason) {}
+                             TriggerReason triggerReason, RecoveryContext recovery) {
+
+    /** INITIAL routing carries no recovery facts. */
+    public RoutingContext(OrderSnapshot order, List<AgentSnapshot> agents,
+                          TriggerReason triggerReason) {
+        this(order, agents, triggerReason, null);
+    }
+}

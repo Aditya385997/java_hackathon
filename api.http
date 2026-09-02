@@ -43,11 +43,21 @@ Content-Type: application/json
 
 { "strategy": "rule-based" }
 
-### Unregistered strategy -> 409, the previous strategy stays active
+### Switch to the AI strategy (T-3) -> 200, active becomes "ai" on the next routing call
+### With no GEMINI_API_KEY set this still succeeds: "ai" activates, and each routing call then
+### degrades to rule-based, so the suggestion above comes back with strategyUsed "rule-based".
+### The WARN line naming the fallback reason is in the application log.
 PATCH {{host}}/routing/strategy
 Content-Type: application/json
 
 { "strategy": "ai" }
+
+### Unregistered strategy -> 409, the previous strategy stays active
+### "ai" is registered since T-3, so this probe needs a key nothing answers to.
+PATCH {{host}}/routing/strategy
+Content-Type: application/json
+
+{ "strategy": "zone-affinity" }
 
 ### Update agent availability (AVAILABLE | BUSY | OFFLINE)
 ### T-1 only records the status; reassigning that agent's orders is T-4.

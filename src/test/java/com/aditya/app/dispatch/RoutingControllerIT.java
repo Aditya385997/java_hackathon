@@ -36,11 +36,14 @@ class RoutingControllerIT {
 
     @Test
     void reportsTheActiveAndRegisteredStrategies() throws Exception {
+        // Membership, not position: the registry sorts keys, so "ai" now precedes
+        // "rule-based" and an index-based assertion would break on every new strategy.
         mockMvc.perform(get("/api/v1/routing/strategy"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value("rule-based"))
                 .andExpect(jsonPath("$.available").isArray())
-                .andExpect(jsonPath("$.available[0]").value("rule-based"));
+                .andExpect(jsonPath("$.available",
+                        org.hamcrest.Matchers.hasItems("ai", "rule-based")));
     }
 
     @Test
@@ -56,13 +59,15 @@ class RoutingControllerIT {
 
     @Test
     void rejectsAnUnknownStrategyAndLeavesTheActiveOneUnchanged() throws Exception {
+        // "ai" is a registered strategy since T-3; this probe needs a key nothing answers to.
         mockMvc.perform(patch("/api/v1/routing/strategy")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"strategy\":\"ai\"}"))
+                        .content("{\"strategy\":\"zone-affinity\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value(409))
                 .andExpect(jsonPath("$.message").value(
-                        org.hamcrest.Matchers.containsString("Unknown routing strategy 'ai'")));
+                        org.hamcrest.Matchers.containsString(
+                                "Unknown routing strategy 'zone-affinity'")));
 
         mockMvc.perform(get("/api/v1/routing/strategy"))
                 .andExpect(jsonPath("$.active").value("rule-based"));

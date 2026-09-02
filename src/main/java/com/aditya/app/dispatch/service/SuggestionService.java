@@ -79,8 +79,10 @@ public class SuggestionService {
         ReassignmentSuggestion saved = suggestionRepository.save(new ReassignmentSuggestion(
                 order.getId(), top.recommendedAgentId(), top.confidence(), top.reasoning(),
                 TriggerReason.INITIAL, top.strategyUsed()));
+        // Logs the producer, not the selection: a strategy that fell back internally reports
+        // the strategy that actually answered, matching the persisted strategyUsed.
         log.info("Strategy '{}' recommended agent {} for order {}; suggestion {} is pending",
-                strategy.key(), top.recommendedAgentId(), orderId, saved.getId());
+                top.strategyUsed(), top.recommendedAgentId(), orderId, saved.getId());
         return SuggestionResponse.from(saved);
     }
 
