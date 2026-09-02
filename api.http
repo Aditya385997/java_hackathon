@@ -1,22 +1,49 @@
-@host = http://localhost:8080
+@host = http://localhost:8080/api/v1
 
-### Create
-POST {{host}}/api/v1/tasks
+### List every order
+GET {{host}}/orders
+
+### Filter by status (ASSIGNED | REASSIGNMENT_PENDING | REASSIGNED | DELIVERED)
+GET {{host}}/orders?status=ASSIGNED
+
+### Unknown status -> 400 with a field violation
+GET {{host}}/orders?status=BOGUS
+
+### Create an order (201; increments the agent's activeOrderCount)
+POST {{host}}/orders
 Content-Type: application/json
 
-{ "title": "First task" }
+{ "id": "ORD-009", "description": "Flowers — Frazer Town to Cooke Town", "assignedAgentId": "AGT-002" }
 
-### List
-GET {{host}}/api/v1/tasks
-
-### List by status
-GET {{host}}/api/v1/tasks?status=NEW
-
-### Get one
-GET {{host}}/api/v1/tasks/1
-
-### Transition
-PATCH {{host}}/api/v1/tasks/1/status
+### Duplicate id -> 409
+POST {{host}}/orders
 Content-Type: application/json
 
-{ "status": "IN_PROGRESS" }
+{ "id": "ORD-001", "description": "Duplicate", "assignedAgentId": "AGT-002" }
+
+### Unknown agent -> 404
+POST {{host}}/orders
+Content-Type: application/json
+
+{ "id": "ORD-010", "description": "Orphan parcel", "assignedAgentId": "AGT-999" }
+
+### Update agent availability (AVAILABLE | BUSY | OFFLINE)
+### T-1 only records the status; reassigning that agent's orders is T-4.
+PATCH {{host}}/agents/AGT-001/status
+Content-Type: application/json
+
+{ "status": "OFFLINE" }
+
+### Accept a reassignment suggestion
+### Requires the order to be REASSIGNMENT_PENDING; nothing raises suggestions until T-2,
+### so seed one via the H2 console first.
+PATCH {{host}}/suggestions/1
+Content-Type: application/json
+
+{ "status": "ACCEPTED" }
+
+### Reject a suggestion (order stays REASSIGNMENT_PENDING)
+PATCH {{host}}/suggestions/1
+Content-Type: application/json
+
+{ "status": "REJECTED" }

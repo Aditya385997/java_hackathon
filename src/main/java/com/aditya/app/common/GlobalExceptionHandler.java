@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.Instant;
 import java.util.List;
@@ -37,6 +38,16 @@ public class GlobalExceptionHandler {
                 .toList();
         ApiError body = new ApiError(Instant.now(), 400, "Bad Request",
                 "Validation failed", req.getRequestURI(), violations);
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiError> handleTypeMismatch(MethodArgumentTypeMismatchException ex,
+                                                       HttpServletRequest req) {
+        ApiError.FieldViolation violation = new ApiError.FieldViolation(
+                ex.getName(), "'" + ex.getValue() + "' is not a valid value");
+        ApiError body = new ApiError(Instant.now(), 400, "Bad Request",
+                "Validation failed", req.getRequestURI(), List.of(violation));
         return ResponseEntity.badRequest().body(body);
     }
 
