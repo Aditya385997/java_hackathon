@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -62,6 +63,18 @@ class SuggestionControllerIT {
                 "ORD-001", "AGT-004", new BigDecimal("0.87"),
                 "AGT-001 went offline; AGT-004 is idle and nearest",
                 TriggerReason.AGENT_OFFLINE, "TEST_FIXTURE"));
+    }
+
+    @Test
+    void listsPendingSuggestionsForTheOpsUi() throws Exception {
+        seedPendingReassignment();
+
+        mockMvc.perform(get("/api/v1/suggestions?status=PENDING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].orderId").value("ORD-001"))
+                .andExpect(jsonPath("$[0].recommendedAgentId").value("AGT-004"))
+                .andExpect(jsonPath("$[0].status").value("PENDING"))
+                .andExpect(jsonPath("$[0].strategyUsed").isNotEmpty());
     }
 
     @Test

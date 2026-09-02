@@ -14,6 +14,7 @@ import com.aditya.app.dispatch.repo.OrderRepository;
 import com.aditya.app.dispatch.repo.ReassignmentSuggestionRepository;
 import com.aditya.app.dispatch.routing.AgentSnapshot;
 import com.aditya.app.dispatch.routing.OrderSnapshot;
+import com.aditya.app.dispatch.routing.RecoveryContext;
 import com.aditya.app.dispatch.routing.RoutingContext;
 import com.aditya.app.dispatch.routing.RoutingRecommendation;
 import com.aditya.app.dispatch.routing.RoutingStrategy;
@@ -56,6 +57,27 @@ public class SuggestionService {
      */
     @Transactional
     public SuggestionResponse suggest(String orderId) {
+        return raise(orderId, TriggerReason.INITIAL, null);
+    }
+
+    /**
+     * The AGENT_OFFLINE entry point, used by the background re-planner. Identical routing to
+     * {@link #suggest}: same strategy, same validation, same AI-to-rule-based fallback, same
+     * PENDING outcome awaiting a human. Only the trigger and the recovery facts differ.
+     */
+    @Transactional
+    public SuggestionResponse suggestForOfflineAgent(String orderId, String failedAgentId,
+                                                     int strandedOrderCount) {
+        return raise(orderId, TriggerReason.AGENT_OFFLINE,
+                new RecoveryContext(failedAgentId, strandedOrderCount));
+    }
+
+    /**
+     * One routing path for both callers. Nothing is mutated until a recommendation exists, so a
+     * strategy that produces nothing leaves the order and the suggestion table untouched.
+     */
+    private SuggestionResponse raise(String orderId, TriggerReason triggerReason,
+                                     RecoveryContext recovery) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new NotFoundException("Order", orderId));
         // Fail before doing routing work the transaction would only roll back.
@@ -65,7 +87,7 @@ public class SuggestionService {
         RoutingContext context = new RoutingContext(
                 OrderSnapshot.from(order),
                 agentRepository.findAll().stream().map(AgentSnapshot::from).toList(),
-                TriggerReason.INITIAL);
+                triggerReason, recovery);
 
         List<RoutingRecommendation> recommendations = strategy.recommend(context);
         if (recommendations.isEmpty()) {
@@ -78,12 +100,20 @@ public class SuggestionService {
 
         ReassignmentSuggestion saved = suggestionRepository.save(new ReassignmentSuggestion(
                 order.getId(), top.recommendedAgentId(), top.confidence(), top.reasoning(),
-                TriggerReason.INITIAL, top.strategyUsed()));
+                triggerReason, top.strategyUsed()));
         // Logs the producer, not the selection: a strategy that fell back internally reports
         // the strategy that actually answered, matching the persisted strategyUsed.
-        log.info("Strategy '{}' recommended agent {} for order {}; suggestion {} is pending",
-                top.strategyUsed(), top.recommendedAgentId(), orderId, saved.getId());
+        log.info("Strategy '{}' recommended agent {} for order {} ({}); suggestion {} is pending",
+                top.strategyUsed(), top.recommendedAgentId(), orderId, triggerReason, saved.getId());
         return SuggestionResponse.from(saved);
+    }
+
+    /** Read model for the Ops UI. Null status returns everything. */
+    public List<SuggestionResponse> findAll(SuggestionStatus status) {
+        List<ReassignmentSuggestion> found = (status == null)
+                ? suggestionRepository.findAll()
+                : suggestionRepository.findByStatus(status);
+        return found.stream().map(SuggestionResponse::from).toList();
     }
 
     /**
