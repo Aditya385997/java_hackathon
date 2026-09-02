@@ -8,4 +8,7 @@ import java.util.List;
 
 public interface OrderRepository extends JpaRepository<Order, String> {
     List<Order> findByStatus(OrderStatus status);
+
+    /** Orders an agent is still holding — the ones stranded when that agent goes OFFLINE. */
+    List<Order> findByAssignedAgentIdAndStatus(String assignedAgentId, OrderStatus status);
 }

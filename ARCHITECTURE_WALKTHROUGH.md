@@ -1,6 +1,6 @@
 # Architecture Walkthrough — ZipRun Dispatch
 
-Revision sheet. Everything here is **implemented and passing** (T-1, T-2, T-3) unless marked
+Revision sheet. Everything here is **implemented and passing** (T-1 through T-5) unless marked
 **FUTURE**. Root package `com.aditya.app`, feature slice `dispatch`.
 
 ---
@@ -32,8 +32,33 @@ Revision sheet. Everything here is **implemented and passing** (T-1, T-2, T-3) u
       v                          v                      v                      v
 ```
 
-Nothing moves an order automatically. A human decides. **FUTURE (T-4):** an
-`AGENT_OFFLINE` event will raise suggestions without a human asking — the decision stays human.
+### T-4: the same pipeline, triggered by a failure instead of a person
+
+```
+PATCH /agents/{id}/status {"status":"OFFLINE"}
+  -> AgentController.updateStatus
+  -> AgentService.updateStatus      agent.changeStatus(OFFLINE), save
+  -> publishEvent(AgentWentOfflineEvent(agentId))
+  => 200 RETURNS HERE — nothing below blocks the caller
+        |
+        | @Async @TransactionalEventListener (AFTER_COMMIT, background thread)
+        v
+  AgentOfflineReplanner.replan(failedAgentId)
+    orderRepository.findByAssignedAgentIdAndStatus(id, ASSIGNED)     <- stranded orders
+    for each order (try/catch per order — one failure cannot strand the rest):
+        existsByOrderIdAndStatusAndTriggerReason(PENDING, AGENT_OFFLINE)?  -> skip
+        SuggestionService.suggestForOfflineAgent(orderId, failedAgentId, strandedCount)
+            -> same RoutingStrategySelector, same strategy, same AI fallback
+            -> order -> REASSIGNMENT_PENDING, PENDING suggestion saved
+        |
+        v
+  React Ops UI polls GET /api/v1/suggestions?status=PENDING every 4s
+    -> ACCEPT / REJECT -> PATCH /api/v1/suggestions/{id}
+    -> order REASSIGNED + loads moved, or suggestion REJECTED
+```
+
+Nothing moves an order automatically — **a human always decides**, whether the suggestion was
+requested by an operator or raised by an agent failure.
 
 ---
 
@@ -81,7 +106,7 @@ and `requireDecidable(...)` / `decide(...)` — so a caller can reject work befo
 
 ---
 
-## 3. API flows (all 6 implemented endpoints)
+## 3. API flows (all 7 implemented endpoints)
 
 ```
 POST /api/v1/orders                        @Valid CreateOrderRequest
@@ -107,7 +132,13 @@ PATCH /api/v1/agents/{id}/status           @Valid UpdateAgentStatusRequest
   -> AgentController.updateStatus
   -> AgentService.updateStatus
   -> agent.changeStatus(target) -> repository.save
-  => 200, AgentResponse        (records availability only; OFFLINE reaction is FUTURE T-4)
+  => 200, AgentResponse        (OFFLINE also publishes AgentWentOfflineEvent — T-4)
+
+GET /api/v1/suggestions?status=PENDING
+  -> SuggestionController.list
+  -> SuggestionService.findAll(status)
+  -> suggestionRepository.findAll() | findByStatus(status)
+  => 200, List<SuggestionResponse>   (the Ops UI read model)
 
 PATCH /api/v1/suggestions/{id}             @Valid UpdateSuggestionRequest
   -> SuggestionController.decide
@@ -366,9 +397,10 @@ Shared: the order, every agent with status + load, and the JSON response contrac
 order would spend all remaining slack on it and strand the rest; the recovery prompt optimises
 for absorbing the remaining N-1 orders too. That changes the answer, not just the wording.
 
-**FUTURE (T-4):** `SuggestionService` currently always passes `TriggerReason.INITIAL`, and
-`RecoveryContext(failedAgentId, strandedOrderCount)` is designed and tested but **nothing
-populates it yet**. The recovery prompt exists and is unit-tested; T-4 wires the trigger.
+Both are live: `SuggestionService.suggest` passes `(INITIAL, null)` and
+`suggestForOfflineAgent` passes `(AGENT_OFFLINE, new RecoveryContext(failedAgentId,
+strandedOrderCount))`. Both delegate to one private `raise(...)`, so routing, validation,
+fallback and `strategyUsed` are provably identical between the two callers.
 
 ---
 
@@ -380,18 +412,33 @@ NOW      HTTP POST /orders/{id}/suggest
                  -> RoutingStrategySelector.active()
                      -> RoutingStrategy.recommend(ctx)      [synchronous]
 
-FUTURE   PATCH /agents/{id}/status {"status":"OFFLINE"}
+ALSO NOW PATCH /agents/{id}/status {"status":"OFFLINE"}
    (T-4)     -> responds 200 immediately
-             -> publishes an event
-             -> @Async handler on a background thread
-                 -> routing orchestration
+             -> publishes AgentWentOfflineEvent
+             -> @Async @TransactionalEventListener -> AgentOfflineReplanner.replan
+                 -> SuggestionService.suggestForOfflineAgent
                      -> RoutingStrategy.recommend(ctx)      [same bean, same method]
 ```
 
 `RoutingStrategy` takes a `RoutingContext` and returns recommendations. It touches no
 repository, holds no mutable state, and never learns who called it. `AiRoutingStrategy` is
-stateless and thread-safe, so a background thread can use it concurrently with an HTTP thread —
-**no change needed for T-4**.
+stateless and thread-safe, so the background thread uses it concurrently with HTTP threads.
+**T-4 required zero changes to any strategy** — only a second entry point on `SuggestionService`.
+
+### T-4 as an agent loop: observe -> reason -> act -> checkpoint
+
+| Step | What actually runs |
+|---|---|
+| **Observe** | `AgentWentOfflineEvent` after commit; `findByAssignedAgentIdAndStatus(id, ASSIGNED)` finds the stranded orders |
+| **Reason** | `AiRoutingStrategy` with the AGENT_OFFLINE prompt (failed agent + stranded count), validated, falling back to the rule when unusable |
+| **Act** | order -> `REASSIGNMENT_PENDING`, a PENDING `ReassignmentSuggestion` persisted — **the act is proposing, not moving** |
+| **Checkpoint** | a human accepts or rejects via `PATCH /api/v1/suggestions/{id}` before any order or load changes |
+
+**Agentic but human-in-the-loop:** the system decides *on its own* that work is stranded, how
+many orders are affected, and who should take each one — no human asked. What it cannot do is
+commit the consequence. The blast radius of a wrong answer is a rejected suggestion, never a
+misrouted parcel. Duplicate suppression means repeated OFFLINE events converge instead of
+piling up.
 
 **Critical path:** the state-change endpoints (`POST /orders`, `PATCH /agents/{id}/status`,
 `PATCH /suggestions/{id}`) must never wait on a model. `POST /suggest` stays synchronous on
@@ -472,10 +519,19 @@ rejects. Dispatch is a real-world action; an LLM recommending it is useful, an L
 unsupervised is not. It also keeps the AI advisory, so a bad recommendation costs a rejected
 suggestion, not a misrouted parcel.
 
-**How will T-4 reuse this?** `PATCH /agents/{id}/status` returns 200 first, then an `@Async`
-handler re-plans on a background thread through the same `RoutingStrategy` bean. The strategy is
-stateless and never learns who called it. `RoutingContext.recovery` and the AGENT_OFFLINE prompt
-already exist — T-4 populates them; the interface does not change.
+**How does T-4 reuse this? (implemented)** `PATCH /agents/{id}/status` returns 200, publishes
+`AgentWentOfflineEvent`, and an `@Async @TransactionalEventListener` runs
+`AgentOfflineReplanner.replan` on a background thread. It owns no routing logic — it calls
+`SuggestionService.suggestForOfflineAgent`, which shares one private `raise(...)` with the HTTP
+path. No strategy changed.
+
+**Why is it agentic if a human still approves?** It observes a failure, reasons about N stranded
+orders, and acts — unprompted. The checkpoint is deliberate: an LLM recommending a reassignment
+is useful, an LLM executing one unsupervised is not.
+
+**How are duplicates prevented?** Before routing an order, the replanner checks
+`existsByOrderIdAndStatusAndTriggerReason(orderId, PENDING, AGENT_OFFLINE)`. Repeated OFFLINE
+events for the same agent converge on the same set of pending suggestions.
 
 **How would `ZoneAffinityStrategy` be added?** One `@Component implements RoutingStrategy` with
 `key()` returning `"zone-affinity"`. The registry discovers it, the endpoint switches to it,
@@ -493,4 +549,5 @@ already exist — T-4 populates them; the interface does not change.
 | No key configured | `ai` still registers and switches; every call falls back, reason logged |
 | Seed | 5 agents `AGT-001..005`, 8 orders `ORD-001..008`, all ASSIGNED |
 | DB | H2 in-memory, `create-drop`, `data.sql` on boot; `postgres` profile uses Flyway + `validate` |
-| Tests | 108 — 80 unit + 28 integration (`./mvnw -B verify`) |
+| Tests | 115 — 82 unit + 33 integration (`./mvnw -B verify`) |
+| Ops UI | `frontend/` — polls `GET /suggestions?status=PENDING` every 4s, Accept/Reject |
